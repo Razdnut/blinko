@@ -93,17 +93,34 @@ export const aiRouter = router({
 
   speechToText: authProcedure
     .input(z.object({
-      filePath: z.string()
+      filePath: z.string(),
+      language: z.string().optional()
     }))
     .mutation(async function ({ input }) {
-      // const { filePath } = input
-      // try {
-      //   const localFilePath = await FileService.getFile(filePath)
-      //   const doc = await AiService.speechToText(localFilePath)
-      //   return doc
-      // } catch (error) {
-      //   throw new Error(error)
-      // }
+      try {
+        return await AiService.speechToText({ filePath: input.filePath, language: input.language });
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Unable to transcribe audio'
+        });
+      }
+    }),
+
+  summarizeAudio: authProcedure
+    .input(z.object({
+      text: z.string().min(1),
+      prompt: z.string().optional()
+    }))
+    .mutation(async function ({ input }) {
+      try {
+        return await AiService.summarizeTranscription({ text: input.text, prompt: input.prompt });
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Unable to summarize audio transcript'
+        });
+      }
     }),
 
   rebuildingEmbeddings: authProcedure

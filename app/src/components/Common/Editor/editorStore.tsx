@@ -148,16 +148,29 @@ export class EditorStore {
     this.focus()
   }
 
-  speechToText = async (filePath) => {
+  speechToText = async (filePath: string) => {
     if (!this.blinko.showAi) {
       return
     }
-    //|| filePath.endsWith('.mp3') || filePath.endsWith('.wav')
-    if (filePath.endsWith('.webm')) {
-      try {
-        const doc = await api.ai.speechToText.mutate({ filePath })
-        this.insertMarkdown(doc[0]?.pageContent)
-      } catch (error) { }
+    if (!filePath) {
+      return
+    }
+
+    const normalizedPath = filePath.split('?')[0]?.toLowerCase();
+    const supportedExtensions = ['webm', 'mp3', 'wav', 'm4a', 'aac', 'ogg', 'mp4'];
+    const extension = normalizedPath?.split('.').pop();
+
+    if (!extension || !supportedExtensions.includes(extension)) {
+      return
+    }
+
+    try {
+      const { text } = await api.ai.speechToText.mutate({ filePath });
+      if (text) {
+        this.insertMarkdown(text);
+      }
+    } catch (error) {
+      console.error('Speech to text failed:', error);
     }
   }
 

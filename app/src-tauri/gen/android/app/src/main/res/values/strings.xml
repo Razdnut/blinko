@@ -7,10 +7,10 @@
     <string name="quick_note_long">Create Note</string>
     <string name="quick_note_disabled">Quick Note is disabled</string>
     
-    <string name="voice_recording_short">Voice Input</string>
-    <string name="voice_recording_long">Voice Recording</string>
-    <string name="voice_recording_disabled">Voice recording is disabled</string>
+    <string name="voice_recording_short">Voice Note</string>
+    <string name="voice_recording_long">Voice Note &amp; Transcription</string>
+    <string name="voice_recording_disabled">Voice tools are disabled</string>
 
     <!-- Widget -->
-    <string name="widget_voice_note_description">Quick Voice Note</string>
+    <string name="widget_voice_note_description">Quick voice note with transcription</string>
 </resources>

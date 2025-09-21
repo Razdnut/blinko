@@ -22,6 +22,8 @@ import { userCaller } from '../routerTrpc/_app';
 import { getAllPathTags } from '@server/lib/helper';
 import { LibSQLVector } from '@mastra/libsql';
 import { RuntimeContext } from "@mastra/core/di";
+import path from 'path';
+import { fetchWithProxy } from '../lib/proxy';
 
 export function isImage(filePath: string): boolean {
   if (!filePath) return false;
@@ -31,6 +33,35 @@ export function isImage(filePath: string): boolean {
 
 export class AiService {
   static isImage = isImage;
+
+  private static resolveOpenAIEndpoint(endpoint?: string, pathName?: string) {
+    const base = (endpoint || 'https://api.openai.com/v1').replace(/\/$/, '');
+    if (!pathName) {
+      return base;
+    }
+    return `${base}${pathName.startsWith('/') ? pathName : `/${pathName}`}`;
+  }
+
+  private static detectMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    switch (ext) {
+      case '.mp3':
+        return 'audio/mpeg';
+      case '.wav':
+        return 'audio/wav';
+      case '.m4a':
+        return 'audio/mp4';
+      case '.aac':
+        return 'audio/aac';
+      case '.ogg':
+        return 'audio/ogg';
+      case '.mp4':
+        return 'audio/mp4';
+      case '.webm':
+      default:
+        return 'audio/webm';
+    }
+  }
 
   static async loadFileContent(filePath: string): Promise<string> {
     try {
@@ -188,6 +219,70 @@ export class AiService {
   static async embeddingDelete({ id }: { id: number }) {
     AiModelFactory.queryAndDeleteVectorById(id);
     return { ok: true };
+  }
+
+  static async speechToText({ filePath, language }: { filePath: string; language?: string }) {
+    const config = await AiModelFactory.globalConfig();
+    if (!config.aiApiKey) {
+      throw new Error('AI API key is not configured');
+    }
+
+    const fetcher = await fetchWithProxy();
+    const audioBuffer = await FileService.getFileBuffer(filePath);
+    const mimeType = AiService.detectMimeType(filePath);
+    const fileName = path.basename(filePath) || `audio${path.extname(filePath) || '.webm'}`;
+
+    const formData = new FormData();
+    const blob = new Blob([audioBuffer], { type: mimeType });
+    formData.append('file', blob, fileName);
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'json');
+    if (language) {
+      formData.append('language', language);
+    }
+
+    const url = AiService.resolveOpenAIEndpoint(config.aiApiEndpoint, '/audio/transcriptions');
+    const response = await fetcher(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.aiApiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      throw new Error(`Transcription failed: ${response.status} ${response.statusText} ${errorBody}`.trim());
+    }
+
+    const data = await response.json();
+    const text = typeof data.text === 'string' ? data.text.trim() : '';
+    return { text };
+  }
+
+  static async summarizeTranscription({ text, prompt }: { text: string; prompt?: string }) {
+    if (!text?.trim()) {
+      throw new Error('No transcription provided');
+    }
+
+    const agent = await AiModelFactory.BaseChatAgent({ withTools: false, withOnlineSearch: false });
+    const instructions = prompt?.trim() ||
+      'You are a helpful assistant that summarizes voice note transcriptions. ' +
+      'Provide a concise summary using short paragraphs or bullet points when appropriate. ' +
+      'Preserve important details like dates, names, tasks and decisions. Respond in the same language as the input.';
+
+    const result = await agent.generate([
+      {
+        role: 'system',
+        content: instructions,
+      },
+      {
+        role: 'user',
+        content: text,
+      },
+    ]);
+
+    return { summary: result.text?.trim() ?? '' };
   }
 
   static async *rebuildEmbeddingIndex({ force = false }: { force?: boolean }): AsyncGenerator<ProgressResult & { progress?: { current: number; total: number } }, void, unknown> {
