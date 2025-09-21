@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { api } from '@/lib/trpc';
 import { FileType } from '../Editor/type';
 import { DeleteIcon, DownloadIcon } from './icons';
@@ -9,6 +9,9 @@ import { observer } from 'mobx-react-lite';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
+import { ToastPlugin } from '@/store/module/Toast/Toast';
+import { eventBus } from '@/lib/event';
+import { BlinkoStore } from '@/store/blinkoStore';
 
 interface AudioMetadata {
   coverUrl?: string;
@@ -34,6 +37,101 @@ export const AudioRender = observer(({ files, preview = false }: Props) => {
   const [duration, setDuration] = useState<Record<string, string>>({});
   const [showAll, setShowAll] = useState(false);
   const { t } = useTranslation()
+  const [transcriptions, setTranscriptions] = useState<Record<string, string>>({});
+  const [summaries, setSummaries] = useState<Record<string, string>>({});
+  const [transcribeLoading, setTranscribeLoading] = useState<Record<string, boolean>>({});
+  const [summarizeLoading, setSummarizeLoading] = useState<Record<string, boolean>>({});
+  const toast = RootStore.Get(ToastPlugin);
+  const blinko = RootStore.Get(BlinkoStore);
+  const aiEnabled = blinko.showAi;
+
+  const setLoadingState = useCallback((setter: React.Dispatch<React.SetStateAction<Record<string, boolean>>>, key: string, value: boolean) => {
+    setter(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const getFilePath = useCallback((file: FileType) => {
+    if (file.uploadPromise?.value) {
+      return file.uploadPromise.value;
+    }
+    return file.preview;
+  }, []);
+
+  const handleInsertIntoNote = useCallback((content: string) => {
+    if (!content) {
+      return;
+    }
+    eventBus.emit('editor:insert', content);
+  }, []);
+
+  const runTranscription = useCallback(async (file: FileType, options: { silent?: boolean } = {}) => {
+    if (!aiEnabled) {
+      if (!options.silent) {
+        toast.error(t('ai-feature-unavailable'));
+      }
+      return '';
+    }
+
+    const filePath = getFilePath(file);
+    if (!filePath) {
+      if (!options.silent) {
+        toast.error(t('transcription-unavailable'));
+      }
+      return '';
+    }
+
+    setLoadingState(setTranscribeLoading, file.name, true);
+    try {
+      const { text } = await api.ai.speechToText.mutate({ filePath });
+      if (text) {
+        setTranscriptions(prev => ({ ...prev, [file.name]: text }));
+      }
+      return text || '';
+    } catch (error) {
+      console.error('Transcription failed:', error);
+      if (!options.silent) {
+        const message = error instanceof Error ? error.message : t('transcription-failed');
+        toast.error(message);
+      }
+      return '';
+    } finally {
+      setLoadingState(setTranscribeLoading, file.name, false);
+    }
+  }, [aiEnabled, getFilePath, setLoadingState, t, toast]);
+
+  const handleTranscribe = useCallback(async (file: FileType) => {
+    await runTranscription(file);
+  }, [runTranscription]);
+
+  const handleSummarize = useCallback(async (file: FileType) => {
+    if (!aiEnabled) {
+      toast.error(t('ai-feature-unavailable'));
+      return;
+    }
+
+    setLoadingState(setSummarizeLoading, file.name, true);
+    try {
+      let transcript = transcriptions[file.name];
+      if (!transcript) {
+        transcript = await runTranscription(file, { silent: true });
+      }
+
+      if (!transcript) {
+        toast.error(t('transcription-required'));
+        return;
+      }
+
+      const { summary } = await api.ai.summarizeAudio.mutate({ text: transcript });
+      if (summary) {
+        setSummaries(prev => ({ ...prev, [file.name]: summary }));
+      }
+    } catch (error) {
+      console.error('Summary generation failed:', error);
+      const message = error instanceof Error ? error.message : t('summary-failed');
+      toast.error(message);
+    } finally {
+      setLoadingState(setSummarizeLoading, file.name, false);
+    }
+  }, [aiEnabled, runTranscription, setLoadingState, t, toast, transcriptions]);
 
   const getMetadata = async (file: FileType) => {
     try {
@@ -194,6 +292,11 @@ export const AudioRender = observer(({ files, preview = false }: Props) => {
     <div className="flex flex-col gap-2">
       {audioFiles.map((file, index) => {
         const metadata = audioMetadata[file.name];
+        const isUploading = file.uploadPromise?.loading?.value;
+        const isTranscribing = !!transcribeLoading[file.name];
+        const isSummarizing = !!summarizeLoading[file.name];
+        const transcript = transcriptions[file.name];
+        const summary = summaries[file.name];
         return (
           <AnimatePresence mode="wait" key={`${file.name}-${index}`}>
             {(!showAll && index >= INITIAL_DISPLAY_COUNT) ? null : (
@@ -326,6 +429,59 @@ export const AudioRender = observer(({ files, preview = false }: Props) => {
                       />
                     )}
                   </div>
+                </div>
+                <div className="px-2 md:px-3 mt-3 space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      isDisabled={!!isUploading}
+                      isLoading={isTranscribing}
+                      onPress={() => handleTranscribe(file)}
+                    >
+                      {t('transcribe')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      isDisabled={!!isUploading}
+                      isLoading={isSummarizing}
+                      onPress={() => handleSummarize(file)}
+                    >
+                      {t('summarize')}
+                    </Button>
+                  </div>
+                  {transcript && (
+                    <div className="rounded-lg bg-default-100 p-3 text-sm whitespace-pre-wrap break-words">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-semibold text-foreground">{t('transcription')}</span>
+                        {!preview && (
+                          <Button size="sm" variant="light" onPress={() => handleInsertIntoNote(transcript)}>
+                            {t('insert-into-note')}
+                          </Button>
+                        )}
+                      </div>
+                      {transcript}
+                    </div>
+                  )}
+                  {summary && (
+                    <div className="rounded-lg bg-default-100 border border-primary/20 p-3 text-sm whitespace-pre-wrap break-words">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-semibold text-foreground">{t('summary')}</span>
+                        {!preview && (
+                          <Button size="sm" variant="light" onPress={() => handleInsertIntoNote(summary)}>
+                            {t('insert-into-note')}
+                          </Button>
+                        )}
+                      </div>
+                      {summary}
+                    </div>
+                  )}
+                  {!aiEnabled && (
+                    <p className="text-xs text-default-500">
+                      {t('ai-feature-unavailable')}
+                    </p>
+                  )}
                 </div>
               </motion.div>
             )}

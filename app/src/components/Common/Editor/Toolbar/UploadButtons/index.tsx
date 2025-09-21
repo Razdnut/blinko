@@ -2,8 +2,6 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton } from '../IconButton';
 import { ShowAudioDialog } from '../../../AudioDialog';
-import { BlinkoStore } from '@/store/blinkoStore';
-import { RootStore } from '@/store';
 import { DropzoneInputProps } from 'react-dropzone';
 import { eventBus } from '@/lib/event';
 
@@ -23,7 +21,6 @@ interface Props {
 
 export const UploadButtons = ({ getInputProps, open, onFileUpload }: Props) => {
   const { t } = useTranslation();
-  const blinko = RootStore.Get(BlinkoStore);
 
   // Listen for audio recording event from Android shortcuts
   useEffect(() => {
@@ -50,7 +47,6 @@ export const UploadButtons = ({ getInputProps, open, onFileUpload }: Props) => {
       icon: "hugeicons:voice-id",
       title: t('recording'),
       onClick: () => ShowAudioDialog((file) => onFileUpload([file])),
-      showCondition: blinko.showAi,
     },
     // {
     //   key: 'camera',
